@@ -26,22 +26,40 @@ Recognize an audio file and print the raw Shazam result:
 shazam recognize path/to/audio.mp3
 ```
 
-Write recognized metadata tags to an audio file and create a renamed copy:
+Write recognized metadata tags and rename the file to `Artist - Title.ext`:
 
 ```bash
 shazam tag path/to/audio.mp3
 ```
 
-Copy the tagged file to `Artist - Title.ext`:
+Tag and rename every FLAC file in the current directory:
 
 ```bash
-shazam tag path/to/audio.mp3
+shazam tag *.flac
 ```
 
-Move instead of copying:
+Write tags without renaming the file:
 
 ```bash
-shazam tag --move path/to/audio.mp3
+shazam tag --no-rename path/to/audio.mp3
+```
+
+Create a renamed copy instead of renaming the original file:
+
+```bash
+shazam tag --copy-renamed path/to/audio.mp3
+```
+
+Preview the match, tags, and rename path without writing files:
+
+```bash
+shazam tag --dry-run path/to/audio.mp3
+```
+
+Skip cover art:
+
+```bash
+shazam tag --no-cover path/to/audio.mp3
 ```
 
 Fetch Shazam metadata by ID:

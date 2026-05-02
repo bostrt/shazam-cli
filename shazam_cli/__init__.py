@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import re
+import shutil
 from pathlib import Path
 
 import aiohttp
@@ -134,22 +135,77 @@ def _embed_cover_art(file_path: str, cover_data: bytes) -> None:
     audio.save()
 
 
+def _copy_file_contents(src: Path, dest: Path) -> None:
+    with src.open("rb") as source, dest.open("xb") as target:
+        shutil.copyfileobj(source, target)
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return left.resolve() == right.resolve()
+
+
+def _unique_path(path: Path, *, source: Path | None = None) -> Path:
+    if source and _same_path(path, source):
+        return source
+
+    if not path.exists():
+        return path
+
+    for index in range(1, 10_000):
+        candidate = path.with_name(f"{path.stem} ({index}){path.suffix}")
+        if not candidate.exists():
+            return candidate
+
+    raise click.ClickException(f"Could not find an available filename for {path}")
+
+
 @cli.command()
-@click.argument("file", type=click.Path(exists=True))
-@click.option("--move", is_flag=True, help="Delete the original file after renaming.")
-def tag(file, move):
-    """Recognize an audio file and write Shazam metadata as tags."""
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option(
+    "--rename/--no-rename",
+    default=True,
+    help="Rename the tagged file to 'Artist - Title.ext'.",
+)
+@click.option(
+    "--copy-renamed",
+    is_flag=True,
+    help="Create a renamed copy instead of renaming the original file.",
+)
+@click.option("--cover/--no-cover", default=True, help="Embed cover art when available.")
+@click.option("--dry-run", is_flag=True, help="Show planned changes without writing files.")
+@click.option("--move", is_flag=True, hidden=True)
+def tag(files, rename, copy_renamed, cover, dry_run, move):
+    """Recognize audio files, write metadata tags, and rename them."""
 
     async def _run():
         shazam = Shazam()
+        failed = 0
+
+        for index, file in enumerate(files, start=1):
+            if len(files) > 1:
+                click.echo(f"\n[{index}/{len(files)}] {file}")
+
+            try:
+                await _tag_file(shazam, file)
+            except click.ClickException as exc:
+                failed += 1
+                click.echo(f"Error: {exc.message}", err=True)
+            except Exception as exc:
+                failed += 1
+                click.echo(f"Error: {exc}", err=True)
+
+        if failed:
+            raise SystemExit(1)
+
+    async def _tag_file(shazam, file):
+        src = Path(file)
 
         click.echo(f"Recognizing {file}...")
         result = await shazam.recognize(file)
 
         raw_track = result.get("track")
         if not raw_track:
-            click.echo("No match found.", err=True)
-            raise SystemExit(1)
+            raise click.ClickException("No match found.")
 
         track_id = int(raw_track["key"])
         click.echo(f"Match: {raw_track.get('title')} - {raw_track.get('subtitle')}")
@@ -189,17 +245,45 @@ def tag(file, move):
         if "Label" in section_meta:
             tags["organization"] = section_meta["Label"]
 
-        cover_url = track_info.photo_url or raw_track.get("images", {}).get("coverarthq")
+        safe_artist = _sanitize_filename(tags["artist"])
+        safe_title = _sanitize_filename(tags["title"])
+        new_name = f"{safe_artist} - {safe_title}{src.suffix}"
+        rename_dest = _unique_path(src.parent / new_name, source=src)
+
+        cover_url = None
+        if cover:
+            cover_url = track_info.photo_url or raw_track.get("images", {}).get("coverarthq")
         cover_data = None
-        if cover_url:
+        if cover_url and not dry_run:
             click.echo("Downloading cover art...")
             cover_data = await _download_image(cover_url)
+
+        if dry_run:
+            click.echo("\nPlanned tags:")
+            for key, value in tags.items():
+                click.echo(f"  {key}: {value}")
+            if cover_url:
+                click.echo("  COVER ART: would embed")
+            elif cover:
+                click.echo("  COVER ART: none found")
+            else:
+                click.echo("  COVER ART: skipped")
+
+            if copy_renamed:
+                click.echo(f"\nWould copy tagged file to: {rename_dest}")
+            elif rename or move:
+                if _same_path(src, rename_dest):
+                    click.echo("\nFile is already named correctly.")
+                else:
+                    click.echo(f"\nWould rename to: {rename_dest}")
+            else:
+                click.echo("\nWould leave filename unchanged.")
+            return
 
         click.echo(f"Writing tags to {file}...")
         audio = mutagen.File(file, easy=True)
         if audio is None:
-            click.echo("Unsupported audio format.", err=True)
-            raise SystemExit(1)
+            raise click.ClickException("Unsupported audio format.")
         for key, value in tags.items():
             try:
                 audio[key] = value
@@ -215,19 +299,25 @@ def tag(file, move):
             click.echo(f"  {key}: {value}")
         if cover_data:
             click.echo(f"  COVER ART: embedded ({len(cover_data)} bytes)")
+        elif cover_url:
+            click.echo("  COVER ART: download failed, skipped")
+        elif not cover:
+            click.echo("  COVER ART: skipped")
 
-        src = Path(file)
-        safe_artist = _sanitize_filename(tags["artist"])
-        safe_title = _sanitize_filename(tags["title"])
-        new_name = f"{safe_artist} - {safe_title}{src.suffix}"
-        dest = src.parent / new_name
-        if dest != src:
-            dest.write_bytes(src.read_bytes())
-            if move:
-                src.unlink()
-                click.echo(f"\nMoved to: {dest}")
+        if copy_renamed:
+            if _same_path(src, rename_dest):
+                click.echo("\nFile is already named correctly; no copy needed.")
             else:
-                click.echo(f"\nCopied to: {dest}")
+                _copy_file_contents(src, rename_dest)
+                click.echo(f"\nCopied to: {rename_dest}")
+        elif rename or move:
+            if _same_path(src, rename_dest):
+                click.echo("\nFile is already named correctly.")
+            else:
+                src.rename(rename_dest)
+                click.echo(f"\nRenamed to: {rename_dest}")
+        else:
+            click.echo("\nFilename unchanged.")
 
     asyncio.run(_run())
 

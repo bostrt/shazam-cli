@@ -1,14 +1,35 @@
 [project]
-name = "shazam"
+name = "shazam-cli"
 version = "0.1.0"
-description = "Add your description here"
+description = "A CLI for recognizing audio files and writing Shazam metadata tags."
+readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
+authors = [
+    { name = "Robert Bost", email = "bostrt@gmail.com" },
+]
+keywords = ["audio", "cli", "metadata", "music", "shazam"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Utilities",
+]
 dependencies = [
     "audioop-lts>=0.2.1",
     "click>=8.3.3",
     "mutagen>=1.47.0",
     "shazamio>=0.8.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/bostrt/shazam-cli"
+Repository = "https://github.com/bostrt/shazam-cli"
+Issues = "https://github.com/bostrt/shazam-cli/issues"
 
 [build-system]
 requires = ["hatchling"]
